@@ -5,8 +5,6 @@ import theano
 import theano.tensor as T
 from theano.compile.nanguardmode import NanGuardMode
 
-import sys
-sys.path.append('/mounts/Users/student/wenpeng/workspace/shared_functions') #replace PATH with the path to Foo
 
 # import lasagne
 # from lasagne import layers
@@ -15,7 +13,7 @@ import cPickle as pickle
 import utils 
 import nn_utils
 
-from theano_functions_wp import adadelta
+
 
 
 floatX = theano.config.floatX

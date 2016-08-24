@@ -2,8 +2,10 @@ import os as os
 import numpy as np
 
 def init_babi(fname):
-    print "==> Loading test from %s" % fname
+    print "==> Loading data from %s" % fname
     tasks = []
+    
+    # every passage-question-answer is put into a dict, then return a dict list
     task = None
     for i, line in enumerate(open(fname)):
         id = int(line[0:line.find(' ')])
@@ -13,11 +15,12 @@ def init_babi(fname):
         line = line.strip()
         line = line.replace('.', ' . ')
         line = line[line.find(' ')+1:]
-        if line.find('?') == -1:
+        if line.find('?') == -1:  #find a context sentence
             task["C"] += line
-        else:
+        else: # find a question
             idx = line.find('?')
             tmp = line[idx+1:].split('\t')
+
             task["Q"] = line[:idx]
             task["A"] = tmp[1].strip()
             tasks.append(task.copy())
@@ -71,7 +74,7 @@ def get_babi_raw(id, test_id):
         "sh19": "../shuffled/qa19_path-finding",
         "sh20": "../shuffled/qa20_agents-motivations",
     }
-    if (test_id == ""):
+    if (test_id == ""):  # so usually test_id is the same as training id
         test_id = id 
     babi_name = babi_map[id]
     babi_test_name = babi_map[test_id]

@@ -100,7 +100,7 @@ def do_epoch(mode, epoch, skipped=0):
     avg_loss = 0.0
     prev_time = time.time()
     
-    batches_per_epoch = dmn.get_batches_per_epoch(mode)
+    batches_per_epoch = dmn.get_batches_per_epoch(mode) # just a scalar for how many batches
     
     for i in range(0, batches_per_epoch):
         step_data = dmn.step(i, mode)
@@ -110,7 +110,7 @@ def do_epoch(mode, epoch, skipped=0):
         current_skip = (step_data["skipped"] if "skipped" in step_data else 0)
         log = step_data["log"]
         
-        skipped += current_skip
+        skipped += current_skip  # is training, current_skip is always 0
         
         if current_skip == 0:
             avg_loss += current_loss
@@ -118,7 +118,7 @@ def do_epoch(mode, epoch, skipped=0):
             for x in answers:
                 y_true.append(x)
             
-            for x in prediction.argmax(axis=1):
+            for x in prediction.argmax(axis=1): # prediction is for batch, so (batch, |V|)
                 y_pred.append(x)
             
             # TODO: save the state sometimes
@@ -154,7 +154,7 @@ if args.mode == 'train':
             dmn.shuffle_train_set()
         
         _, skipped = do_epoch('train', epoch, skipped)
-        
+        # test after each epoch training
         epoch_loss, skipped = do_epoch('test', epoch, skipped)
         
         state_name = 'states/%s.epoch%d.test%.5f.state' % (network_name, epoch, epoch_loss)

@@ -237,7 +237,7 @@ class DMN_batch:
         return z * h + (1 - z) * _h
     
     
-    def _empty_word_vector(self):
+    def _empty_word_vector(self): # used to pad shorter context or question
         return np.zeros((self.word_vector_size,), dtype=floatX)
     
     
@@ -247,7 +247,7 @@ class DMN_batch:
                                      self.W_inp_hid_in, self.W_inp_hid_hid, self.b_inp_hid)
     
     
-    def new_attention_step(self, ct, prev_g, mem, q_q):
+    def new_attention_step(self, ct, prev_g, mem, q_q):  # different with dmn_basic
         z = T.concatenate([ct, mem, q_q, ct * q_q, ct * mem, (ct - q_q) ** 2, (ct - mem) ** 2], axis=0)
         
         l_1 = T.dot(self.W_1, z) + self.b_1.dimshuffle(0, 'x')
@@ -341,6 +341,7 @@ class DMN_batch:
             while(len(input_mask) < max_fact_count):
                 input_mask.append(-1)
             
+            #only change the inp, q, input_mask
             inputs.append(inp)
             questions.append(q)
             answers.append(ans)
@@ -364,7 +365,7 @@ class DMN_batch:
         input_masks = []
         
         for x in data_raw:
-            inp = x["C"].lower().split(' ') 
+            inp = x["C"].lower().split(' ')   # all lowercase
             inp = [w for w in inp if len(w) > 0]
             q = x["Q"].lower().split(' ')
             q = [w for w in q if len(w) > 0]
@@ -374,7 +375,7 @@ class DMN_batch:
                                         vocab = self.vocab, 
                                         ivocab = self.ivocab, 
                                         word_vector_size = self.word_vector_size, 
-                                        to_return = "word2vec") for w in inp]
+                                        to_return = "word2vec") for w in inp]  # a list of word embeddings in the passage
     
             q_vector = [utils.process_word(word = w, 
                                         word2vec = self.word2vec, 
@@ -385,15 +386,16 @@ class DMN_batch:
             
             if (self.input_mask_mode == 'word'):
                 input_mask = range(len(inp))
-            elif (self.input_mask_mode == 'sentence'):
-                input_mask = [index for index, w in enumerate(inp) if w == '.']
+            elif (self.input_mask_mode == 'sentence'): # default is sentence
+                input_mask = [index for index, w in enumerate(inp) if w == '.']  #input_mask store the position of sentence ends
             else:
                 raise Exception("unknown input_mask_mode")
-            fact_count = len(input_mask)
+            fact_count = len(input_mask) # how  many sentences
     
             inputs.append(inp_vector)
             questions.append(q_vector)
             # NOTE: here we assume the answer is one word! 
+            #note here answer is a word index
             answers.append(utils.process_word(word = x["A"], 
                                             word2vec = self.word2vec, 
                                             vocab = self.vocab, 
