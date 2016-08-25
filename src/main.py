@@ -1,4 +1,5 @@
 import sys
+sys.setrecursionlimit(6000)
 import numpy as np
 import sklearn.metrics as metrics
 import argparse
@@ -12,7 +13,7 @@ print "==> parsing input arguments"
 parser = argparse.ArgumentParser()
 
 parser.add_argument('--network', type=str, default="dmn_batch", help='network type: dmn_basic, dmn_smooth, or dmn_batch')
-parser.add_argument('--word_vector_size', type=int, default=50, help='embeding size (50, 100, 200, 300 only)')
+parser.add_argument('--word_vector_size', type=int, default=300, help='embeding size (50, 100, 200, 300 only)')
 parser.add_argument('--dim', type=int, default=40, help='number of hidden units in input module GRU')
 parser.add_argument('--epochs', type=int, default=500, help='number of epochs')
 parser.add_argument('--load_state', type=str, default="", help='state file path')
@@ -22,8 +23,8 @@ parser.add_argument('--input_mask_mode', type=str, default="sentence", help='inp
 parser.add_argument('--memory_hops', type=int, default=5, help='memory GRU steps')
 parser.add_argument('--batch_size', type=int, default=10, help='no commment')
 parser.add_argument('--babi_id', type=str, default="1", help='babi task ID')
-parser.add_argument('--l2', type=float, default=0, help='L2 regularization')
-parser.add_argument('--normalize_attention', type=bool, default=False, help='flag for enabling softmax on attention vector')
+parser.add_argument('--l2', type=float, default=0.00005, help='L2 regularization')
+parser.add_argument('--normalize_attention', type=bool, default=True, help='flag for enabling softmax on attention vector')
 parser.add_argument('--log_every', type=int, default=1, help='print information every x iteration')
 parser.add_argument('--save_every', type=int, default=1, help='save state every x epoch')
 parser.add_argument('--prefix', type=str, default="", help='optional prefix of network name')
@@ -102,10 +103,17 @@ def do_epoch(mode, epoch, skipped=0):
     
     batches_per_epoch = dmn.get_batches_per_epoch(mode) # just a scalar for how many batches
     
+    if mode == 'test':
+        batches_per_epoch=50
+    if mode == 'train':
+        batches_per_epoch=100    
+    
     for i in range(0, batches_per_epoch):
+        if i%1==0:
+            print i, '/', batches_per_epoch, 'at epoch', epoch+1
         step_data = dmn.step(i, mode)
         prediction = step_data["prediction"]
-        answers = step_data["answers"]
+        answers = step_data["answers"] #so, in training, ans is a list of paded list; in dev, ans is a list of set of list
         current_loss = step_data["current_loss"]
         current_skip = (step_data["skipped"] if "skipped" in step_data else 0)
         log = step_data["log"]
@@ -115,19 +123,25 @@ def do_epoch(mode, epoch, skipped=0):
         if current_skip == 0:
             avg_loss += current_loss
             
-            for x in answers:
-                y_true.append(x)
-            
-            for x in prediction.argmax(axis=1): # prediction is for batch, so (batch, |V|)
-                y_pred.append(x)
-            
-            # TODO: save the state sometimes
-            if (i % args.log_every == 0):
-                cur_time = time.time()
-                print ("  %sing: %d.%d / %d \t loss: %.3f \t avg_loss: %.3f \t skipped: %d \t %s \t time: %.2fs" % 
-                    (mode, epoch, i * args.batch_size, batches_per_epoch * args.batch_size, 
-                     current_loss, avg_loss / (i + 1), skipped, log, cur_time - prev_time))
-                prev_time = cur_time
+            if mode=='test':
+#                 for x in answers:
+#                     y_true.append(x)
+#                 
+#                 for x in prediction.argmax(axis=1): # prediction is for batch, so (batch, |V|)
+#                     y_pred.append(x)
+#                 
+#                 # TODO: save the state sometimes
+#                 if (i % args.log_every == 0):
+#                     cur_time = time.time()
+#                     print ("  %sing: %d.%d / %d \t loss: %.3f \t avg_loss: %.3f \t skipped: %d \t %s \t time: %.2fs" % 
+#                         (mode, epoch, i * args.batch_size, batches_per_epoch * args.batch_size, 
+#                          current_loss, avg_loss / (i + 1), skipped, log, cur_time - prev_time))
+#                     prev_time = cur_time
+                y_true+=answers
+                neighborsArgSorted = np.argsort(prediction, axis=1)
+                kNeighborsArg = neighborsArgSorted[:,-5:]
+                kNeighborsArg=kNeighborsArg[:, ::-1]
+                y_pred.append(kNeighborsArg)
         
         if np.isnan(current_loss):
             print "==> current loss IS NaN. This should never happen :) " 
@@ -135,11 +149,24 @@ def do_epoch(mode, epoch, skipped=0):
 
     avg_loss /= batches_per_epoch
     print "\n  %s loss = %.5f" % (mode, avg_loss)
-    print "confusion matrix:"
-    print metrics.confusion_matrix(y_true, y_pred)
     
-    accuracy = sum([1 if t == p else 0 for t, p in zip(y_true, y_pred)])
-    print "accuracy: %.2f percent" % (accuracy * 100.0 / batches_per_epoch / args.batch_size)
+    if mode =='test':
+        #print "confusion matrix:"
+#         print metrics.confusion_matrix(y_true, y_pred)
+        
+#         accuracy = sum([1 if t == p else 0 for t, p in zip(y_true, y_pred)])
+#         print "accuracy: %.2f percent" % (accuracy * 100.0 / batches_per_epoch / args.batch_size)
+        
+        y_pred=np.concatenate(y_pred, axis=0)
+        if len(y_pred)!=len(y_true):
+            print 'len(y_pred)!=len(y_true)', len(y_pred), len(y_true)
+            exit(0)
+        
+        MacroF1=0.0
+        for i in range(len(y_pred)):
+            MacroF1+=utils.MacroF1(y_pred[i], y_true[i])
+        MacroF1/=len(y_pred)
+        print 'test over, MacroF1:', MacroF1
     
     return avg_loss, skipped
 
@@ -156,13 +183,13 @@ if args.mode == 'train':
         _, skipped = do_epoch('train', epoch, skipped)
         # test after each epoch training
         epoch_loss, skipped = do_epoch('test', epoch, skipped)
-        
+        '''
         state_name = 'states/%s.epoch%d.test%.5f.state' % (network_name, epoch, epoch_loss)
 
         if (epoch % args.save_every == 0):    
             print "==> saving ... %s" % state_name
             dmn.save_params(state_name, epoch)
-        
+        '''
         print "epoch %d took %.3fs" % (epoch, float(time.time()) - start_time)
 
 elif args.mode == 'test':
