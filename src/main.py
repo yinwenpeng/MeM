@@ -17,7 +17,7 @@ parser.add_argument('--word_vector_size', type=int, default=300, help='embeding 
 parser.add_argument('--dim', type=int, default=40, help='number of hidden units in input module GRU')
 parser.add_argument('--epochs', type=int, default=500, help='number of epochs')
 parser.add_argument('--load_state', type=str, default="", help='state file path')
-parser.add_argument('--answer_module', type=str, default="feedforward", help='answer module type: feedforward or recurrent')
+parser.add_argument('--answer_module', type=str, default="recurrent", help='answer module type: feedforward or recurrent')
 parser.add_argument('--mode', type=str, default="train", help='mode: train or test. Test mode required load_state')
 parser.add_argument('--input_mask_mode', type=str, default="sentence", help='input_mask_mode: word or sentence')
 parser.add_argument('--memory_hops', type=int, default=5, help='memory GRU steps')
@@ -106,10 +106,10 @@ def do_epoch(mode, epoch, skipped=0):
     if mode == 'test':
         batches_per_epoch=50
     if mode == 'train':
-        batches_per_epoch=100    
+        batches_per_epoch=50    
     
     for i in range(0, batches_per_epoch):
-        if i%1==0:
+        if i%10==0:
             print i, '/', batches_per_epoch, 'at epoch', epoch+1
         step_data = dmn.step(i, mode)
         prediction = step_data["prediction"]
@@ -138,10 +138,17 @@ def do_epoch(mode, epoch, skipped=0):
 #                          current_loss, avg_loss / (i + 1), skipped, log, cur_time - prev_time))
 #                     prev_time = cur_time
                 y_true+=answers
-                neighborsArgSorted = np.argsort(prediction, axis=1)
-                kNeighborsArg = neighborsArgSorted[:,-5:]
-                kNeighborsArg=kNeighborsArg[:, ::-1]
-                y_pred.append(kNeighborsArg)
+                neighborsArgSorted = np.argmax(prediction, axis=2)
+#                 kNeighborsArg = neighborsArgSorted[:,:,-3:]
+#                 kNeighborsArg=kNeighborsArg[:, ::-1]# sounds not useful
+                for th in range(len(neighborsArgSorted)):
+                    valid_idlist=[]
+                    for value in neighborsArgSorted[th]:
+                        if value !=0:
+                            valid_idlist.append(value)
+                        else:
+                            break
+                    y_pred.append(valid_idlist)
         
         if np.isnan(current_loss):
             print "==> current loss IS NaN. This should never happen :) " 
@@ -157,7 +164,7 @@ def do_epoch(mode, epoch, skipped=0):
 #         accuracy = sum([1 if t == p else 0 for t, p in zip(y_true, y_pred)])
 #         print "accuracy: %.2f percent" % (accuracy * 100.0 / batches_per_epoch / args.batch_size)
         
-        y_pred=np.concatenate(y_pred, axis=0)
+#         y_pred=np.concatenate(y_pred, axis=0)
         if len(y_pred)!=len(y_true):
             print 'len(y_pred)!=len(y_true)', len(y_pred), len(y_true)
             exit(0)

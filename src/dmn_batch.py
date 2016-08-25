@@ -175,15 +175,15 @@ class DMN_batch:
             
             # TODO: add conditional ending
             dummy = theano.shared(np.zeros((self.vocab_size, self.batch_size), dtype=floatX))
-            results, updates = theano.scan(fn=self.answer_step,
+            results, updates = theano.scan(fn=answer_step,
                 outputs_info=[last_mem, T.zeros_like(dummy)], #(last_mem, y)
-                n_steps=1)
-            self.prediction = results[1][-1]
+                n_steps=7)
+            self.prediction = results[1] # (7, |V|, batch_size)
         
         else:
             raise Exception("invalid answer_module")
         
-        self.prediction = self.prediction.dimshuffle(1, 0)
+        self.prediction = self.prediction.dimshuffle(2, 0, 1)  #(batch, 7, |V|)
         
         #wenpeng, add word embeddings as para        
         self.params = [self.W_inp_res_in, self.W_inp_res_hid, self.b_inp_res, 
@@ -203,9 +203,9 @@ class DMN_batch:
                               
         print "==> building loss layer and computing updates"
 #         self.loss_ce = T.nnet.categorical_crossentropy(self.prediction, self.answer_var).mean()
-        ii = T.repeat(T.arange(self.prediction.shape[0]), self.answer_var.shape[1])
+        ii = T.arange(self.batch_size*7)
         jj = self.answer_var.flatten()
-        self.loss_ce = - T.sum(T.log(self.prediction[ii,jj]))
+        self.loss_ce = - T.sum(T.log(self.prediction.reshape((self.batch_size*7, self.vocab_size))[ii,jj]))
             
         if self.l2 > 0:
             self.loss_l2 = self.l2 * nn_utils.l2_reg(self.params)
@@ -231,9 +231,9 @@ class DMN_batch:
             for param_i, grad_i, acc_i in zip(self.params, gradient, accumulator):
                 acc = acc_i + T.sqr(grad_i)
                 if param_i == self.emb:
-                    updates.append((param_i, T.set_subtensor((param_i - 0.5 * grad_i / T.sqrt(acc+1e-8))[0], theano.shared(np.zeros(self.word_vector_size)))))   #AdaGrad
+                    updates.append((param_i, T.set_subtensor((param_i - 0.1 * grad_i / T.sqrt(acc+1e-8))[0], theano.shared(np.zeros(self.word_vector_size)))))   #AdaGrad
                 else:
-                    updates.append((param_i, param_i - 0.5 * grad_i / T.sqrt(acc+1e-8)))   #AdaGrad
+                    updates.append((param_i, param_i - 0.1 * grad_i / T.sqrt(acc+1e-8)))   #AdaGrad
                 updates.append((acc_i, acc))           
             print "==> compiling train_fn"
             self.train_fn = theano.function(inputs=[self.inp_ids, self.q_ids, self.answer_var, 
@@ -359,7 +359,7 @@ class DMN_batch:
                 max_q_len = max(max_q_len, len(q))
                 max_fact_count = max(max_fact_count, fact_count)
                 max_ans_len = max(max_ans_len, len(ans))
-            
+            max_ans_len=7 #truncate training ans into 7 words
             questions = []
             inputs = []
             answers = []
@@ -379,11 +379,11 @@ class DMN_batch:
                     input_mask.append(-1)
                 
                 
-                rep_ans=max_ans_len/len(ans)
-#                 print 'ans:', ans, 'rep_ans:', rep_ans
-                ans=(ans*(rep_ans+1))[:max_ans_len]
-    #             while(len(ans) < max_ans_len):
-    #                 ans.append(-1)  # append word index -1 at the end of ans sequence
+#                 rep_ans=max_ans_len/len(ans)
+#                 ans=(ans*(rep_ans+1))[:max_ans_len]
+                while(len(ans) < max_ans_len):
+                    ans.append(0)  # append word index 0 at ans ends, denote this is unvalid token
+                ans=ans[:max_ans_len]
                 
                 #only change the inp, q, input_mask
                 inputs.append(inp)
