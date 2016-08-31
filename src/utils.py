@@ -2,10 +2,12 @@ import os as os
 import numpy as np
 import json
 from sklearn.metrics import f1_score
+import operator
 
 def refine_text(sequence, passage=True):
     if passage:
         seq=sequence.replace('. ', ' . ')
+#         print 'seq:', seq
         if seq[-1]=='.':
             seq=seq[:-1]+' .'
         return seq
@@ -14,6 +16,31 @@ def refine_text(sequence, passage=True):
             return sequence[:-1]
         else:
             return sequence
+
+def match(str1, str2):
+    uni1=str1.split()
+    uni2=str2.split()
+    bigram1=[]
+    for i in range(len(uni1)-1):
+        bigram1.append(uni1[i]+'=='+uni1[i+1])
+    bigram2=[]
+    for i in range(len(uni2)-1):
+        bigram2.append(uni2[i]+'=='+uni2[i+1])
+        
+    match_uni=len(set(uni1)&set(uni2))
+    match_bi=len(set(bigram1)&set(bigram2))
+    return 0.5*match_uni+match_bi
+    
+def filt_passage_by_question(passage_str, q_str):
+    sents=passage_str.strip().split('.')
+    sent2score={}
+    for sent in sents:
+        if len(sent)>0:
+            sent2score[sent]=match(sent, q_str)
+    opti_sent=max(sent2score.iteritems(), key=operator.itemgetter(1))[0]
+#     if len(opti_sent.strip())==0:
+#         print 
+    return opti_sent
 
 def  load_train():
     with open('/mounts/data/proj/wenpeng/Dataset/SQuAD/train-v1.0.json') as data_file:    
@@ -36,8 +63,10 @@ def  load_train():
                 question_q=data['data'][i]['paragraphs'][j]['qas'][q]['question']
                 answer_q=data['data'][i]['paragraphs'][j]['qas'][q]['answers'][0]['text']
                 
-                task["C"] = refine_text(paragraph, True)
-                task["Q"] = refine_text(question_q, False)
+                best_q=refine_text(question_q, False)
+                best_passage_sent=filt_passage_by_question(paragraph, best_q)
+                task["C"] = refine_text(best_passage_sent, True)
+                task["Q"] = best_q
                 task["A"] = answer_q
                 tasks.append(task.copy())
                 
@@ -73,8 +102,10 @@ def  load_dev_or_test():
                     answer_q=data['data'][i]['paragraphs'][j]['qas'][q]['answers'][ans]['text']
                     q_ansSet.add(answer_q.strip())
 
-                task["C"] = refine_text(paragraph, True)
-                task["Q"] = refine_text(question_q, False)
+                best_q=refine_text(question_q, False)
+                best_passage_sent=filt_passage_by_question(paragraph, best_q)
+                task["C"] = refine_text(best_passage_sent, True)
+                task["Q"] = best_q
                 task["A"] = q_ansSet
                 tasks.append(task.copy())
                 
@@ -257,3 +288,17 @@ def MacroF1(idlist, set_idlist):
             max_f1=new_f1
 #     print max_f1
     return max_f1
+
+def detect_boundary(wordlist1, query_list):
+#     print wordlist1, query_list
+    try:
+        start = wordlist1.index(query_list[0])
+    except ValueError:
+        start = len(wordlist1)
+    end=max(len(wordlist1),start+len(query_list)-1)
+    return [start, end]
+        
+    
+    
+    
+    

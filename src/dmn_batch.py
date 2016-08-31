@@ -26,10 +26,16 @@ class DMN_batch:
         
         print "==> not used params in DMN class:", kwargs.keys()
         
+        self.para_max_len=655
+        
+        
         self.vocab = {}
         self.ivocab = {}
         #build vocab
         self.vocab_build(babi_train_raw, babi_test_raw) # true word index starts from 1, 0 means zero pad
+        self.comma_id=self.vocab.get('.')
+#         print 'self.comma_id:', self.ivocab[6]
+        
         self.word2vec = word2vec
         self.word_vector_size = word_vector_size
         self.dim = dim
@@ -49,7 +55,7 @@ class DMN_batch:
 
         rand_values=np.random.normal(0.0, 0.1, (self.vocab_size, self.word_vector_size))
         rand_values[0]=np.array(np.zeros(self.word_vector_size),dtype=theano.config.floatX)
-        rand_values=self.load_word2vec_to_init(rand_values)        
+#         rand_values=self.load_word2vec_to_init(rand_values)        
         self.emb=theano.shared(name='emb', value=rand_values.astype(theano.config.floatX), borrow=True)
         #rand_values[0]=numpy.array([1e-50]*emb_size)
 
@@ -78,13 +84,13 @@ class DMN_batch:
         self.W_inp_hid_hid = nn_utils.normal_param(std=0.1, shape=(self.dim, self.dim))
         self.b_inp_hid = nn_utils.constant_param(value=0.0, shape=(self.dim,))
         
-        input_var_shuffled = self.input_var.dimshuffle(1, 2, 0)
+        input_var_shuffled = self.input_var.dimshuffle(1, 2, 0)  #(para_len, emb_size, batch_size)
         inp_dummy = theano.shared(np.zeros((self.dim, self.batch_size), dtype=floatX))
         inp_c_history, _ = theano.scan(fn=self.input_gru_step, 
                             sequences=input_var_shuffled,
                             outputs_info=T.zeros_like(inp_dummy))
         
-        inp_c_history_shuffled = inp_c_history.dimshuffle(2, 0, 1)
+        inp_c_history_shuffled = inp_c_history.dimshuffle(2, 0, 1)  #(batch_size, para_len, emb_size)
         
         inp_c_list = []
         inp_c_mask_list = []
@@ -93,9 +99,9 @@ class DMN_batch:
             inp_c_list.append(T.concatenate([taken, T.zeros((self.input_mask_var.shape[1] - taken.shape[0], self.dim), floatX)]))
             inp_c_mask_list.append(T.concatenate([T.ones((taken.shape[0],), np.int32), T.zeros((self.input_mask_var.shape[1] - taken.shape[0],), np.int32)]))
         
-        self.inp_c = T.stack(inp_c_list).dimshuffle(1, 2, 0)
+        self.inp_c = T.stack(inp_c_list).dimshuffle(1, 2, 0) #(para_len, emb_size, batch_size)
         inp_c_mask = T.stack(inp_c_mask_list).dimshuffle(1, 0)
-        
+        #preprocess question
         q_var_shuffled = self.q_var.dimshuffle(1, 2, 0)
         q_dummy = theano.shared(np.zeros((self.dim, self.batch_size), dtype=floatX))
         q_q_history, _ = theano.scan(fn=self.input_gru_step, 
@@ -152,39 +158,58 @@ class DMN_batch:
             self.prediction = nn_utils.softmax(T.dot(self.W_a, last_mem)) #softmax over each column
         
         elif self.answer_module == 'recurrent':
-            self.W_ans_res_in = nn_utils.normal_param(std=0.1, shape=(self.dim, self.dim + self.vocab_size))
+            self.W_ans_res_in = nn_utils.normal_param(std=0.1, shape=(self.dim, self.dim*2))
             self.W_ans_res_hid = nn_utils.normal_param(std=0.1, shape=(self.dim, self.dim))
             self.b_ans_res = nn_utils.constant_param(value=0.0, shape=(self.dim,))
             
-            self.W_ans_upd_in = nn_utils.normal_param(std=0.1, shape=(self.dim, self.dim + self.vocab_size))
+            self.W_ans_upd_in = nn_utils.normal_param(std=0.1, shape=(self.dim, self.dim*2))
             self.W_ans_upd_hid = nn_utils.normal_param(std=0.1, shape=(self.dim, self.dim))
             self.b_ans_upd = nn_utils.constant_param(value=0.0, shape=(self.dim,))
             
-            self.W_ans_hid_in = nn_utils.normal_param(std=0.1, shape=(self.dim, self.dim + self.vocab_size))
+            self.W_ans_hid_in = nn_utils.normal_param(std=0.1, shape=(self.dim, self.dim*2))
             self.W_ans_hid_hid = nn_utils.normal_param(std=0.1, shape=(self.dim, self.dim))
             self.b_ans_hid = nn_utils.constant_param(value=0.0, shape=(self.dim,))
             
-            def answer_step(prev_a, prev_y):
-                a = self.GRU_update(prev_a, T.concatenate([prev_y, self.q_q]),
+            
+            #for attention
+            self.att_W_para=nn_utils.normal_param(std=0.1, shape=(self.dim, self.dim))
+            self.transformed_para_intensor=T.tanh(T.dot(inp_c_history_shuffled, self.att_W_para))
+            
+            self.att_W_q=nn_utils.normal_param(std=0.1, shape=(self.dim, self.dim))
+            self.att_vector_2_one=nn_utils.normal_param(std=0.1, shape=(1, self.dim))
+            def answer_step(prev_a, prev_distri):
+                prev_distri_intotensor=prev_distri.reshape((prev_distri.shape[0], 1, prev_distri.shape[1]))
+                blend_passage=T.sum(prev_distri_intotensor*inp_c_history_shuffled.dimshuffle(0, 2,1), axis=2).reshape((self.batch_size, self.dim)).transpose() #(dim, batch)
+                a = self.GRU_update(prev_a, T.concatenate([blend_passage, self.q_q]),
                                   self.W_ans_res_in, self.W_ans_res_hid, self.b_ans_res, 
                                   self.W_ans_upd_in, self.W_ans_upd_hid, self.b_ans_upd,
                                   self.W_ans_hid_in, self.W_ans_hid_hid, self.b_ans_hid)
                 
-                y = nn_utils.softmax(T.dot(self.W_a, a))
-                return [a, y]
+                #a in (dim, batch)
+                transformed_a=T.tanh(T.dot(self.att_W_q, a)) # (dim, batch)
+                #inp_c_history_shuffled #(batch_size, para_len, emb_size)
+                repeat_a_intensor=T.repeat(transformed_a.transpose().reshape((self.batch_size, 1, self.dim)), inp_c_history_shuffled.shape[1], axis=1)    
+                add_both=0.5*(repeat_a_intensor+self.transformed_para_intensor)
+                
+                att_distri_inall = T.tanh(T.dot(self.att_vector_2_one, add_both.reshape((add_both.shape[0]*add_both.shape[1], add_both.shape[2])).transpose())) #(batch, #word, 1)   
+                att_distri_inbatch=att_distri_inall.reshape((self.batch_size, inp_c_history_shuffled.shape[1]))
+                new_distri = T.nnet.softmax(att_distri_inbatch) #(batch_size, #words)
+                return [a,new_distri]
             
             # TODO: add conditional ending
-            dummy = theano.shared(np.zeros((self.vocab_size, self.batch_size), dtype=floatX))
+            dummy = theano.shared(np.zeros((self.batch_size, self.para_max_len), dtype=floatX))
             results, updates = theano.scan(fn=answer_step,
                 outputs_info=[last_mem, T.zeros_like(dummy)], #(last_mem, y)
-                n_steps=7)
-            self.prediction = results[1] # (7, |V|, batch_size)
+                n_steps=2)
+            self.prediction = results[1] # (2, batch_size, #words)
         
         else:
             raise Exception("invalid answer_module")
         
-        self.prediction = self.prediction.dimshuffle(2, 0, 1)  #(batch, 7, |V|)
-        
+#         self.prediction = self.prediction.dimshuffle(2, 0, 1)  #recurrent(batch, 7, |V|)
+        self.prediction = self.prediction.dimshuffle(1, 0, 2).reshape((self.batch_size*2, self.inp_ids.shape[1]))
+        self.test_prediction=T.argmax(self.prediction, axis=1).reshape((self.batch_size, 2))
+
         #wenpeng, add word embeddings as para        
         self.params = [self.W_inp_res_in, self.W_inp_res_hid, self.b_inp_res, 
                   self.W_inp_upd_in, self.W_inp_upd_hid, self.b_inp_upd,
@@ -192,21 +217,26 @@ class DMN_batch:
                   self.W_mem_res_in, self.W_mem_res_hid, self.b_mem_res, 
                   self.W_mem_upd_in, self.W_mem_upd_hid, self.b_mem_upd,
                   self.W_mem_hid_in, self.W_mem_hid_hid, self.b_mem_hid, #self.W_b
-                  self.W_1, self.W_2, self.b_1, self.b_2, self.W_a,
+                  self.W_1, self.W_2, self.b_1, self.b_2,
                   self.emb]
         
         if self.answer_module == 'recurrent':
             self.params = self.params + [self.W_ans_res_in, self.W_ans_res_hid, self.b_ans_res, 
                               self.W_ans_upd_in, self.W_ans_upd_hid, self.b_ans_upd,
-                              self.W_ans_hid_in, self.W_ans_hid_hid, self.b_ans_hid]
+                              self.W_ans_hid_in, self.W_ans_hid_hid, self.b_ans_hid,
+                              self.att_W_para, self.att_W_q, self.att_vector_2_one]
                               
                               
         print "==> building loss layer and computing updates"
 #         self.loss_ce = T.nnet.categorical_crossentropy(self.prediction, self.answer_var).mean()
+        '''
         ii = T.arange(self.batch_size*7)
         jj = self.answer_var.flatten()
         self.loss_ce = - T.sum(T.log(self.prediction.reshape((self.batch_size*7, self.vocab_size))[ii,jj]))
-            
+        '''
+        ii = T.arange(self.answer_var.shape[0]*self.answer_var.shape[1])
+        jj = self.answer_var.flatten()
+        self.loss_ce = - T.sum(T.log(self.prediction[ii,jj]))           
         if self.l2 > 0:
             self.loss_l2 = self.l2 * nn_utils.l2_reg(self.params)
         else:
@@ -244,7 +274,7 @@ class DMN_batch:
         print "==> compiling test_fn"
         self.test_fn = theano.function(inputs=[self.inp_ids, self.q_ids, #self.answer_var, do not use answer as input for dev and test
                                                self.fact_count_var, self.input_mask_var],
-                                       outputs=self.prediction, on_unused_input='ignore')
+                                       outputs=self.test_prediction, on_unused_input='ignore')
         
     
     
@@ -359,12 +389,15 @@ class DMN_batch:
                 max_q_len = max(max_q_len, len(q))
                 max_fact_count = max(max_fact_count, fact_count)
                 max_ans_len = max(max_ans_len, len(ans))
-            max_ans_len=7 #truncate training ans into 7 words
+
             questions = []
             inputs = []
             answers = []
             fact_counts = []
             input_masks = []
+            
+            
+            max_inp_len=self.para_max_len
             
             for inp, q, ans, fact_count, input_mask in zipped:
                 while(len(inp) < max_inp_len):
@@ -382,7 +415,7 @@ class DMN_batch:
 #                 rep_ans=max_ans_len/len(ans)
 #                 ans=(ans*(rep_ans+1))[:max_ans_len]
                 while(len(ans) < max_ans_len):
-                    ans.append(0)  # append word index 0 at ans ends, denote this is unvalid token
+                    ans.append(self.comma_id)  # append word index 0 at ans ends, denote this is unvalid token
                 ans=ans[:max_ans_len]
                 
                 #only change the inp, q, input_mask
@@ -419,6 +452,8 @@ class DMN_batch:
             inputs = []
             fact_counts = []
             input_masks = []
+            
+            max_inp_len=self.para_max_len
             
             for inp, q, fact_count, input_mask in zipped:
                 while(len(inp) < max_inp_len):
@@ -480,8 +515,11 @@ class DMN_batch:
                         self.vocab[w] = next_index
                         self.ivocab[next_index] = w      
         print '==> vocab build over, totally:', len(self.vocab),' words'           
+
+
        
     def _train_rawinput_toid(self, data_raw):
+        #note that, in train, the answer is start and end position, in test, the answer is word id list
         questions = []
         inputs = []
         answers = []
@@ -498,8 +536,10 @@ class DMN_batch:
             inp_vector = [self.vocab.get(w) for w in inp]  # a list of word ids in the passage
     
             q_vector = [self.vocab.get(w) for w in q]
-
-            ans_indices = [self.vocab.get(w) for w in ans]
+            
+            
+            
+            ans_indices = utils.detect_boundary(inp, ans)#[self.vocab.get(w) for w in ans]
             
             if (self.input_mask_mode == 'word'):
                 input_mask = range(len(inp))
@@ -674,9 +714,10 @@ class DMN_batch:
         
         param_norm = np.max([utils.get_norm(x.get_value()) for x in self.params])
         if mode == "train":
-            inp, q, ans, fact_count, input_mask = self._process_batch(inp, q, ans, fact_count, input_mask, mode)
-            ret = theano_fn(inp, q, ans, fact_count, input_mask)
-            return {"prediction": ret[0],
+            inp_pad, q_pad, ans_pad, fact_count_pad, input_mask_pad = self._process_batch(inp, q, ans, fact_count, input_mask, mode)
+            ret = theano_fn(inp_pad, q_pad, ans_pad, fact_count_pad, input_mask_pad)
+            return {"input": inp,
+                    "prediction": ret[0],
                     "answers": ans,   #so, in training, ans is a list of paded list; in dev, ans is a list of set of list
                     "current_loss": ret[1],
                     "skipped": 0,
@@ -684,11 +725,12 @@ class DMN_batch:
                     }
         if mode == "test":
             #print 'start process_batch'    
-            inp, q, fact_count, input_mask = self._process_batch(inp, q, ans, fact_count, input_mask, mode)
+            inp_pad, q_pad, fact_count_pad, input_mask_pad = self._process_batch(inp, q, ans, fact_count, input_mask, mode)
             #print 'start test a minibatch...'
-            ret = theano_fn(inp, q, fact_count, input_mask)
+            ret = theano_fn(inp_pad, q_pad, fact_count_pad, input_mask_pad)
             #print 'minibatch test finished, trying to return...'            
-            return {"prediction": ret,
+            return {"input": inp,
+                    "prediction": ret,
                     "answers": ans,   #so, in training, ans is a list of paded list; in dev, ans is a list of set of list
                     "current_loss": 0.0,
                     "skipped": 0,
