@@ -14,14 +14,14 @@ parser = argparse.ArgumentParser()
 
 parser.add_argument('--network', type=str, default="dmn_batch", help='network type: dmn_basic, dmn_smooth, or dmn_batch')
 parser.add_argument('--word_vector_size', type=int, default=50, help='embeding size (50, 100, 200, 300 only)')
-parser.add_argument('--dim', type=int, default=20, help='number of hidden units in input module GRU')
+parser.add_argument('--dim', type=int, default=10, help='number of hidden units in input module GRU')
 parser.add_argument('--epochs', type=int, default=500, help='number of epochs')
 parser.add_argument('--load_state', type=str, default="", help='state file path')
 parser.add_argument('--answer_module', type=str, default="recurrent", help='answer module type: feedforward or recurrent')
 parser.add_argument('--mode', type=str, default="train", help='mode: train or test. Test mode required load_state')
 parser.add_argument('--input_mask_mode', type=str, default="word", help='input_mask_mode: word or sentence')
 parser.add_argument('--memory_hops', type=int, default=5, help='memory GRU steps')
-parser.add_argument('--batch_size', type=int, default=10, help='no commment')
+parser.add_argument('--batch_size', type=int, default=50, help='no commment')
 parser.add_argument('--babi_id', type=str, default="1", help='babi task ID')
 parser.add_argument('--l2', type=float, default=0.00005, help='L2 regularization')
 parser.add_argument('--normalize_attention', type=bool, default=True, help='flag for enabling softmax on attention vector')
@@ -103,13 +103,13 @@ def do_epoch(mode, epoch, skipped=0):
     
     batches_per_epoch = dmn.get_batches_per_epoch(mode) # just a scalar for how many batches
     comma_id = dmn.comma_id
-    if mode == 'test':
-        batches_per_epoch=10
-    if mode == 'train':
-        batches_per_epoch=10    
+#     if mode == 'test':
+#         batches_per_epoch=10
+#     if mode == 'train':
+#         batches_per_epoch=10    
     
     for i in range(0, batches_per_epoch):
-        if i%100==0:
+        if i%500==0:
             print i, '/', batches_per_epoch, 'at epoch', epoch+1
         step_data = dmn.step(i, mode)
         inp =  step_data["input"]

@@ -64,8 +64,8 @@ def  load_train():
                 answer_q=data['data'][i]['paragraphs'][j]['qas'][q]['answers'][0]['text']
                 
                 best_q=refine_text(question_q, False)
-                best_passage_sent=filt_passage_by_question(paragraph, best_q)
-                task["C"] = refine_text(best_passage_sent, True)
+#                 best_passage_sent=filt_passage_by_question(paragraph, best_q)
+                task["C"] = refine_text(paragraph, True)
                 task["Q"] = best_q
                 task["A"] = answer_q
                 tasks.append(task.copy())
@@ -103,8 +103,8 @@ def  load_dev_or_test():
                     q_ansSet.add(answer_q.strip())
 
                 best_q=refine_text(question_q, False)
-                best_passage_sent=filt_passage_by_question(paragraph, best_q)
-                task["C"] = refine_text(best_passage_sent, True)
+#                 best_passage_sent=filt_passage_by_question(paragraph, best_q)
+                task["C"] = refine_text(paragraph, True)
                 task["Q"] = best_q
                 task["A"] = q_ansSet
                 tasks.append(task.copy())
@@ -295,7 +295,7 @@ def detect_boundary(wordlist1, query_list):
         start = wordlist1.index(query_list[0])
     except ValueError:
         start = len(wordlist1)
-    end=max(len(wordlist1),start+len(query_list)-1)
+    end=min(len(wordlist1),start+len(query_list)-1)
     return [start, end]
         
     

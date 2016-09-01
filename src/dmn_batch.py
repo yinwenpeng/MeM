@@ -18,6 +18,11 @@ import copy
 
 floatX = theano.config.floatX
 
+'''
+1, mask for question
+2, mask for testing output id selection
+'''
+
 class DMN_batch:
     
     def __init__(self, babi_train_raw, babi_test_raw, word2vec, word_vector_size, dim, 
@@ -88,19 +93,19 @@ class DMN_batch:
         inp_dummy = theano.shared(np.zeros((self.dim, self.batch_size), dtype=floatX))
         inp_c_history, _ = theano.scan(fn=self.input_gru_step, 
                             sequences=input_var_shuffled,
-                            outputs_info=T.zeros_like(inp_dummy))
+                            outputs_info=T.zeros_like(inp_dummy)) #(para, emb_size, batch)
         
         inp_c_history_shuffled = inp_c_history.dimshuffle(2, 0, 1)  #(batch_size, para_len, emb_size)
-        
+   
         inp_c_list = []
         inp_c_mask_list = []
         for batch_index in range(self.batch_size):
             taken = inp_c_history_shuffled[batch_index].take(self.input_mask_var[batch_index, :self.fact_count_var[batch_index]], axis=0)
             inp_c_list.append(T.concatenate([taken, T.zeros((self.input_mask_var.shape[1] - taken.shape[0], self.dim), floatX)]))
-            inp_c_mask_list.append(T.concatenate([T.ones((taken.shape[0],), np.int32), T.zeros((self.input_mask_var.shape[1] - taken.shape[0],), np.int32)]))
-        
+            inp_c_mask_list.append(T.concatenate([T.ones((taken.shape[0],), np.float32), T.zeros((self.input_mask_var.shape[1] - taken.shape[0],), np.float32)]))
         self.inp_c = T.stack(inp_c_list).dimshuffle(1, 2, 0) #(para_len, emb_size, batch_size)
-        inp_c_mask = T.stack(inp_c_mask_list).dimshuffle(1, 0)
+        
+        self.inp_c_mask = T.stack(inp_c_mask_list).dimshuffle(1, 0) # (para_len, batch_size)
         #preprocess question
         q_var_shuffled = self.q_var.dimshuffle(1, 2, 0)
         q_dummy = theano.shared(np.zeros((self.dim, self.batch_size), dtype=floatX))
@@ -148,7 +153,7 @@ class DMN_batch:
             net = layers.DropoutLayer(net, p=self.dropout)
         last_mem = layers.get_output(net).dimshuffle((1, 0)) #(dim, batch_size)
         '''
-        last_mem=memory[-1] #by wenpeng
+        last_mem=memory[-1] #by wenpeng (dim, batch)
 
         
         print "==> building answer module"
@@ -173,13 +178,14 @@ class DMN_batch:
             
             #for attention
             self.att_W_para=nn_utils.normal_param(std=0.1, shape=(self.dim, self.dim))
-            self.transformed_para_intensor=T.tanh(T.dot(inp_c_history_shuffled, self.att_W_para))
+            self.transformed_para_intensor=T.tanh(T.dot(self.inp_c.dimshuffle(2,0,1), self.att_W_para))
             
             self.att_W_q=nn_utils.normal_param(std=0.1, shape=(self.dim, self.dim))
             self.att_vector_2_one=nn_utils.normal_param(std=0.1, shape=(1, self.dim))
             def answer_step(prev_a, prev_distri):
-                prev_distri_intotensor=prev_distri.reshape((prev_distri.shape[0], 1, prev_distri.shape[1]))
-                blend_passage=T.sum(prev_distri_intotensor*inp_c_history_shuffled.dimshuffle(0, 2,1), axis=2).reshape((self.batch_size, self.dim)).transpose() #(dim, batch)
+                masked_prev_distri=prev_distri*self.inp_c_mask.transpose()
+                prev_distri_intotensor=masked_prev_distri.reshape((masked_prev_distri.shape[0], 1, masked_prev_distri.shape[1]))
+                blend_passage=T.sum(prev_distri_intotensor*self.inp_c.dimshuffle(2,1,0), axis=2).reshape((self.batch_size, self.dim)).transpose() #(dim, batch)
                 a = self.GRU_update(prev_a, T.concatenate([blend_passage, self.q_q]),
                                   self.W_ans_res_in, self.W_ans_res_hid, self.b_ans_res, 
                                   self.W_ans_upd_in, self.W_ans_upd_hid, self.b_ans_upd,
@@ -188,18 +194,19 @@ class DMN_batch:
                 #a in (dim, batch)
                 transformed_a=T.tanh(T.dot(self.att_W_q, a)) # (dim, batch)
                 #inp_c_history_shuffled #(batch_size, para_len, emb_size)
-                repeat_a_intensor=T.repeat(transformed_a.transpose().reshape((self.batch_size, 1, self.dim)), inp_c_history_shuffled.shape[1], axis=1)    
-                add_both=0.5*(repeat_a_intensor+self.transformed_para_intensor)
+                repeat_a_intensor=T.repeat(transformed_a.transpose().reshape((self.batch_size, 1, self.dim)), self.inp_c.shape[0], axis=1)    
+                add_both=self.inp_c_mask.transpose().reshape((self.batch_size, 1, self.inp_c_mask.shape[0])).dimshuffle(0,2,1)*(repeat_a_intensor+self.transformed_para_intensor)
                 
                 att_distri_inall = T.tanh(T.dot(self.att_vector_2_one, add_both.reshape((add_both.shape[0]*add_both.shape[1], add_both.shape[2])).transpose())) #(batch, #word, 1)   
-                att_distri_inbatch=att_distri_inall.reshape((self.batch_size, inp_c_history_shuffled.shape[1]))
-                new_distri = T.nnet.softmax(att_distri_inbatch) #(batch_size, #words)
+                att_distri_inbatch=att_distri_inall.reshape((self.batch_size, self.inp_c.shape[0]))
+                new_distri = T.nnet.softmax(att_distri_inbatch)*self.inp_c_mask.transpose() #(batch_size, #words)
                 return [a,new_distri]
             
             # TODO: add conditional ending
             dummy = theano.shared(np.zeros((self.batch_size, self.para_max_len), dtype=floatX))
             results, updates = theano.scan(fn=answer_step,
-                outputs_info=[last_mem, T.zeros_like(dummy)], #(last_mem, y)
+#                 outputs_info=[last_mem, T.zeros_like(dummy)], #(last_mem, y)
+                outputs_info=[last_mem, T.alloc(np.float32(1.0/self.para_max_len), self.batch_size, self.para_max_len)],
                 n_steps=2)
             self.prediction = results[1] # (2, batch_size, #words)
         
@@ -234,9 +241,38 @@ class DMN_batch:
         jj = self.answer_var.flatten()
         self.loss_ce = - T.sum(T.log(self.prediction.reshape((self.batch_size*7, self.vocab_size))[ii,jj]))
         '''
-        ii = T.arange(self.answer_var.shape[0]*self.answer_var.shape[1])
-        jj = self.answer_var.flatten()
-        self.loss_ce = - T.sum(T.log(self.prediction[ii,jj]))           
+        #neg log loss plus ranking loss
+        
+        def loss_step(pred_vector, answer_vector, valid_len):
+            start_pos=answer_vector[0]
+            end_pos=answer_vector[1]
+            neg_loss_th=-T.sum(T.log(pred_vector[T.arange(start_pos, end_pos+1)]))
+            #ranking loss
+            posi_vec = pred_vector[T.arange(start_pos, end_pos+1)]
+            posi_mean=T.mean(posi_vec)
+            nega_mean=T.mean(pred_vector[T.concatenate([T.arange(0, start_pos), T.arange(end_pos+1, T.minimum(self.para_max_len, valid_len))])]) #pred_vector[T.arange(0, start_pos)])#
+            rank_loss_th=T.maximum(0.0, 0.001+nega_mean-posi_mean)     
+            return    neg_loss_th, rank_loss_th    
+        
+        (neg_losses, rank_losses), _ = theano.scan(fn=loss_step, 
+                            sequences=[self.prediction, T.repeat(self.answer_var, 2, axis=0), T.repeat(self.fact_count_var, 2)])        
+#         overall_neg_loss=0.0
+#         overall_ranking_loss=0.0
+#         for batch_th in np.arange(self.batch_size*2):
+#             ans_th=batch_th/2
+#             start_pos=self.answer_var[ans_th][0]
+#             end_pos=self.answer_var[ans_th][1]
+#             neg_loss_th=-T.sum(T.log(self.prediction[batch_th][T.arange(start_pos, end_pos)]))
+#             overall_neg_loss+=neg_loss_th
+#             #ranking loss
+#             posi_mean=T.mean(T.log(self.prediction[batch_th][T.arange(start_pos, end_pos)]))
+#             nega_mean=T.mean(T.log(self.prediction[batch_th][T.concatenate([T.arange(0, start_pos), T.arange(end_pos+1, self.para_max_len)])]))
+#             rank_loss_th=T.maximum(0.0, 0.1+nega_mean-posi_mean) 
+#             overall_ranking_loss+=rank_loss_th
+        self.loss_ce=T.sum(neg_losses)+T.sum(rank_losses)
+#         ii = T.arange(self.answer_var.shape[0]*self.answer_var.shape[1])
+#         jj = self.answer_var.flatten()
+#         self.loss_ce = - T.sum(T.log(self.prediction[ii,jj]))           
         if self.l2 > 0:
             self.loss_l2 = self.l2 * nn_utils.l2_reg(self.params)
         else:
@@ -260,10 +296,10 @@ class DMN_batch:
          
             for param_i, grad_i, acc_i in zip(self.params, gradient, accumulator):
                 acc = acc_i + T.sqr(grad_i)
-                if param_i == self.emb:
-                    updates.append((param_i, T.set_subtensor((param_i - 0.1 * grad_i / T.sqrt(acc+1e-8))[0], theano.shared(np.zeros(self.word_vector_size)))))   #AdaGrad
-                else:
-                    updates.append((param_i, param_i - 0.1 * grad_i / T.sqrt(acc+1e-8)))   #AdaGrad
+#                 if param_i == self.emb:
+#                     updates.append((param_i, T.set_subtensor((param_i - 0.1 * grad_i / T.sqrt(acc+1e-8))[0], theano.shared(np.zeros(self.word_vector_size)))))   #AdaGrad
+#                 else:
+                updates.append((param_i, param_i - 0.1 * grad_i / T.sqrt(acc+1e-8)))   #AdaGrad
                 updates.append((acc_i, acc))           
             print "==> compiling train_fn"
             self.train_fn = theano.function(inputs=[self.inp_ids, self.q_ids, self.answer_var, 
@@ -308,29 +344,30 @@ class DMN_batch:
                                      self.W_inp_hid_in, self.W_inp_hid_hid, self.b_inp_hid)
     
     
-    def new_attention_step(self, ct, prev_g, mem, q_q):  # different with dmn_basic
+    def new_attention_step(self, ct, _mask, prev_g, mem, q_q):  # different with dmn_basic
         z = T.concatenate([ct, mem, q_q, ct * q_q, ct * mem, (ct - q_q) ** 2, (ct - mem) ** 2], axis=0)
         
         l_1 = T.dot(self.W_1, z) + self.b_1.dimshuffle(0, 'x')
         l_1 = T.tanh(l_1)
         l_2 = T.dot(self.W_2, l_1) + self.b_2.dimshuffle(0, 'x')
-        G = T.nnet.sigmoid(l_2)[0]
+        G = T.nnet.sigmoid(l_2)[0]*_mask  # mask is a 0-1 vector
         return G
         
         
-    def new_episode_step(self, ct, g, prev_h):
+    def new_episode_step(self, ct, g, _mask,  prev_h):
         gru = self.GRU_update(prev_h, ct,
                              self.W_mem_res_in, self.W_mem_res_hid, self.b_mem_res, 
                              self.W_mem_upd_in, self.W_mem_upd_hid, self.b_mem_upd,
                              self.W_mem_hid_in, self.W_mem_hid_hid, self.b_mem_hid)
         
         h = g * gru + (1 - g) * prev_h
-        return h
+        h_new = _mask*h + (1-_mask)*prev_h
+        return h_new
      
        
     def new_episode(self, mem):
         g, g_updates = theano.scan(fn=self.new_attention_step,
-            sequences=self.inp_c,
+            sequences=[self.inp_c, self.inp_c_mask],
             non_sequences=[mem, self.q_q],
             outputs_info=T.zeros_like(self.inp_c[0][0])) 
         
@@ -338,14 +375,15 @@ class DMN_batch:
             g = nn_utils.softmax(g)
         
         e, e_updates = theano.scan(fn=self.new_episode_step,
-            sequences=[self.inp_c, g],
+            sequences=[self.inp_c, g, self.inp_c_mask],
             outputs_info=T.zeros_like(self.inp_c[0]))
-        
+        '''
         e_list = []
         for index in range(self.batch_size):
             e_list.append(e[self.fact_count_var[index] - 1, :, index])
         return T.stack(e_list).dimshuffle((1, 0))
-   
+        '''
+        return e[-1] #(dim, batch)
    
     def save_params(self, file_name, epoch, **kwargs):
         with open(file_name, 'w') as save_file:
@@ -419,11 +457,11 @@ class DMN_batch:
                 ans=ans[:max_ans_len]
                 
                 #only change the inp, q, input_mask
-                inputs.append(inp)
+                inputs.append(inp[:self.para_max_len])
                 questions.append(q)
                 answers.append(ans)
-                fact_counts.append(fact_count)
-                input_masks.append(input_mask)
+                fact_counts.append(min(max_inp_len, fact_count))
+                input_masks.append(input_mask[:self.para_max_len])
                 
             inputs = np.array(inputs).astype(np.int32)
             questions = np.array(questions).astype(np.int32)
@@ -467,10 +505,10 @@ class DMN_batch:
 
                 
                 #only change the inp, q, input_mask
-                inputs.append(inp)
+                inputs.append(inp[:self.para_max_len])
                 questions.append(q)
-                fact_counts.append(fact_count)
-                input_masks.append(input_mask)
+                fact_counts.append(min(max_inp_len, fact_count))
+                input_masks.append(input_mask[:self.para_max_len])
                 
             inputs = np.array(inputs).astype(np.int32)
             questions = np.array(questions).astype(np.int32)
