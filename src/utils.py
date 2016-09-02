@@ -294,8 +294,8 @@ def detect_boundary(wordlist1, query_list):
     try:
         start = wordlist1.index(query_list[0])
     except ValueError:
-        start = len(wordlist1)
-    end=min(len(wordlist1),start+len(query_list)-1)
+        start = len(wordlist1) - 1
+    end=min(len(wordlist1),start+len(query_list))  #the id of last word, not include
     return [start, end]
         
     

@@ -246,11 +246,12 @@ class DMN_batch:
         def loss_step(pred_vector, answer_vector, valid_len):
             start_pos=answer_vector[0]
             end_pos=answer_vector[1]
-            neg_loss_th=-T.sum(T.log(pred_vector[T.arange(start_pos, end_pos+1)]))
+            posi_vec = pred_vector[T.arange(start_pos, end_pos)]
+            neg_loss_th=-T.sum(T.log(posi_vec))
             #ranking loss
-            posi_vec = pred_vector[T.arange(start_pos, end_pos+1)]
+            #posi_vec = pred_vector[T.arange(start_pos, end_pos+1)]
             posi_mean=T.mean(posi_vec)
-            nega_mean=T.mean(pred_vector[T.concatenate([T.arange(0, start_pos), T.arange(end_pos+1, T.minimum(self.para_max_len, valid_len))])]) #pred_vector[T.arange(0, start_pos)])#
+            nega_mean=T.mean(pred_vector[T.concatenate([T.arange(0, start_pos), T.arange(end_pos, T.minimum(self.para_max_len, valid_len))])]) #pred_vector[T.arange(0, start_pos)])#
             rank_loss_th=T.maximum(0.0, 0.001+nega_mean-posi_mean)     
             return    neg_loss_th, rank_loss_th    
         
@@ -436,7 +437,7 @@ class DMN_batch:
             
             
             max_inp_len=self.para_max_len
-            
+            max_fact_count=self.para_max_len
             for inp, q, ans, fact_count, input_mask in zipped:
                 while(len(inp) < max_inp_len):
 #                     inp.append(self._empty_word_vector())
@@ -492,7 +493,7 @@ class DMN_batch:
             input_masks = []
             
             max_inp_len=self.para_max_len
-            
+            max_fact_count=self.para_max_len
             for inp, q, fact_count, input_mask in zipped:
                 while(len(inp) < max_inp_len):
                     inp.append(0)
@@ -577,7 +578,7 @@ class DMN_batch:
             
             
             
-            ans_indices = utils.detect_boundary(inp, ans)#[self.vocab.get(w) for w in ans]
+            ans_indices = utils.detect_boundary(inp[:self.para_max_len], ans)#[self.vocab.get(w) for w in ans]
             
             if (self.input_mask_mode == 'word'):
                 input_mask = range(len(inp))
